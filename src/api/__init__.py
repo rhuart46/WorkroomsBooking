@@ -1,3 +1,6 @@
+"""
+Create the main API and aggregate all endpoint namespaces in it.
+"""
 from flask_restx import Api
 
 from .bookings import api as booking_ns
