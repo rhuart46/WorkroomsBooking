@@ -4,16 +4,14 @@ Configuration and preparation of SQLAlchemy tools.
 from typing import Type
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 
-from configs import SQLITE_FILE_NAME
+from configs.local import DATABASE_URI
 
 
 # Private factory:
 def _make_session_class() -> Type[Session]:
-    db_uri = f"sqlite:///{SQLITE_FILE_NAME}"
-    engine = create_engine(db_uri)
+    engine = create_engine(DATABASE_URI)
     return sessionmaker(bind=engine)
 
 

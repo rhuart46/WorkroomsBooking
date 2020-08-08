@@ -5,7 +5,7 @@ import os
 from runpy import run_path
 import sys
 
-from src.configs import SQLITE_FILE_NAME
+from configs.local import SQLITE_FILE_NAME
 
 from init_storage import init_sqlite_db
 
@@ -19,4 +19,4 @@ if SQLITE_FILE_NAME not in os.listdir(os.getcwd()):
     init_sqlite_db(SQLITE_FILE_NAME)
 
 # Launch the API:
-run_path(os.path.join(SRC_DIR, "app.py"), run_name="workrooms_booking")
+run_path(os.path.join(SRC_DIR, "app.py"), run_name="workrooms_booking_local")
