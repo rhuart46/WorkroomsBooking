@@ -14,9 +14,9 @@ def init_sqlite_db(db_file_name: str) -> None:
     cur.execute(
         """
         CREATE TABLE rooms (
-            code TEXT,
-            name TEXT,
-            floor INTEGER,
+            code TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            floor INTEGER NOT NULL,
             capacity INTEGER
         );
         """
@@ -25,10 +25,10 @@ def init_sqlite_db(db_file_name: str) -> None:
         """
         CREATE TABLE bookings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            author TEXT,
-            start_datetime TEXT,
-            end_datetime TEXT,
-            room_code TEXT,
+            author TEXT NOT NULL,
+            start_datetime TEXT NOT NULL,
+            duration INTEGER NOT NULL,
+            room_code TEXT NOT NULL,
             FOREIGN KEY(room_code) REFERENCES rooms(code)
         );
         """
