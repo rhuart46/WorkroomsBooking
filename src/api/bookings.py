@@ -3,6 +3,7 @@ from typing import Any, Dict
 
 from flask_restx import Namespace, Resource, fields, inputs, marshal
 from flask_restx.reqparse import RequestParser
+from pytz import timezone
 from sqlalchemy import func
 from werkzeug.exceptions import NotFound, UnprocessableEntity
 
@@ -45,6 +46,7 @@ booking_short_model = api.model("bookings_collection_item", {
         example="2020-08-04 09:00:00",
     ),
     "duration_in_hours": fields.Integer(
+        attribute="duration",
         description="The number of hours for which the booking must be registered.",
         example="2",
     ),
@@ -89,15 +91,16 @@ def _post_parser() -> RequestParser:
     return parser
 
 
-def _validate_booking_inputs(input_args: Dict[str, Any]) -> None:
+def _validate_booking_inputs(input_args: Dict[str, Any]) -> Dict[str, Any]:
     # Extract values (all are required, no error expected):
+    output_args = input_args.copy()
     room_code: str = input_args["room_code"]
     start_datetime: dt.datetime = input_args["start_datetime"]
     duration: int = input_args["duration_in_hours"]
 
     # Check that the room_code refers to an existing room:
-    session = new_session()
-    room = session.query(Room).get(room_code)
+    db_session = new_session()
+    room = db_session.query(Room).get(room_code)
     if not room:
         raise NotFound(f"No room bearing the code {room_code}. Please provide a valid one.")
 
@@ -107,6 +110,13 @@ def _validate_booking_inputs(input_args: Dict[str, Any]) -> None:
             "The start_datetime must not contain minutes nor seconds: one can only book rooms for entire hours."
         )
 
+    # Make the start datetime localized in the same time zone as the room:
+    local_tz = timezone(room.building.tz_name)
+    if start_datetime.tzinfo is None:
+        output_args["start_datetime"] = local_tz.localize(start_datetime)
+    else:
+        output_args["start_datetime"] = start_datetime.astimezone(local_tz)
+
     # Check that the booking duration does not lead to the next day:
     if not 0 < duration <= 25:
         raise UnprocessableEntity(
@@ -114,24 +124,23 @@ def _validate_booking_inputs(input_args: Dict[str, Any]) -> None:
             "The parameter duration_in_hours must be a positive number less or equal to 24."
         )
 
+    db_session.close()
+
+    return output_args
+
 
 def _post_computation_parser() -> RequestParser:
     parser = RequestParser()
     parser.add_argument(
-        "target_day_start",
-        type=inputs.datetime_from_iso8601,
+        "target_day",
+        type=inputs.date_from_iso8601,
         required=True,
-        help="The start datetime of the day for which we want to compute availabilities (with UTC offset).",
-        default=lambda: dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        help="The start datetime of the day for which we want to compute availabilities.",
+        default=lambda: dt.datetime.now().date().isoformat()
     )
     parser.add_argument("room_code", type=str, help="Identifier of the room for which to compute availabilities.")
     parser.add_argument("floor", type=int, help="If no room_code, compute availabilities for all rooms of this floor.")
     return parser
-
-
-def _validate_day_start(datetime: dt.datetime) -> None:
-    if datetime.hour != 0 or datetime.minute != 0 or datetime.second != 0:
-        raise UnprocessableEntity(f"This datetime does not represent a day start: {datetime}.")
 
 
 #
@@ -151,7 +160,8 @@ class BookingsResource(Resource):
         filters = self.list_parser.parse_args(strict=True)
 
         # Build the filtered query:
-        query = new_session().query(Booking)
+        db_session = new_session()
+        query = db_session.query(Booking)
         day_filter_value = filters.pop("day")
         if day_filter_value:
             query = query.filter(func.DATE(Booking.start_datetime) == day_filter_value)
@@ -160,6 +170,7 @@ class BookingsResource(Resource):
 
         # Return all matching results:
         bookings = query.all()
+        db_session.close()
         return bookings, 200
 
     post_parser = _post_parser()
@@ -178,13 +189,13 @@ class BookingsResource(Resource):
         """Try to book a room"""
         # Get and validate inputs:
         args = self.post_parser.parse_args(strict=True)
-        _validate_booking_inputs(args)
+        args = _validate_booking_inputs(args)
 
         # Check the availability of the room for the requested period:
         room_code = args["room_code"]
         start_datetime = args["start_datetime"]
         if not is_room_available(room_code, start_datetime, args["duration_in_hours"]):
-            room_availability_info = get_available_slots(start_datetime, room_codes=[room_code])
+            room_availability_info = get_available_slots(start_datetime.date(), room_codes=[room_code])
             assert len(room_availability_info) == 1
             return marshal(room_availability_info[0], room_availabilities_model), 409
 
@@ -198,6 +209,7 @@ class BookingsResource(Resource):
         db_session = new_session()
         db_session.add(new_booking)
         db_session.commit()
+        db_session.close()
 
         return marshal(new_booking, booking_model), 201
 
@@ -210,7 +222,9 @@ class BookingResource(Resource):
     @api.marshal_with(booking_model)
     def get(self, id: int):
         """Get a booking from its id."""
-        booking = new_session().query(Booking).get(id)
+        db_session = new_session()
+        booking = db_session.query(Booking).get(id)
+        db_session.close()
         if not booking:
             raise NotFound(f"This booking ID does not exist: {id}.")
         return booking, 200
@@ -228,6 +242,7 @@ class BookingResource(Resource):
         # Then delete it:
         db_session.delete(booking)
         db_session.commit()
+        db_session.close()
 
         return None, 204
 
@@ -244,8 +259,7 @@ class AvailabilitiesResource(Resource):
         """Listing all availabilities for a given day, and for a given room if requested."""
         # Get and validate inputs:
         args = self.parser.parse_args(strict=True)
-        target_day_start = args["target_day_start"]
-        _validate_day_start(target_day_start)
+        target_day = args["target_day"]
         room_code = args.get("room_code")
         floor = args.get("floor")
 
@@ -260,7 +274,8 @@ class AvailabilitiesResource(Resource):
             rooms = db_session.query(Room).filter_by(floor=floor).all()
         else:
             rooms = db_session.query(Room).all()
+        db_session.close()
 
         # Compute availabilities for all these rooms:
-        availabilities = get_available_slots(target_day_start, room_codes=[r.code for r in rooms])
+        availabilities = get_available_slots(target_day, room_codes=[r.code for r in rooms])
         return availabilities, 200

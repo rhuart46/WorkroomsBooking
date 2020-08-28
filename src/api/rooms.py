@@ -55,7 +55,8 @@ class RoomsResource(Resource):
         min_capacity = filters.get("min_capacity")
 
         # Build the query:
-        query = new_session().query(Room)
+        db_session = new_session()
+        query = db_session.query(Room)
         if search_in_name:
             query = query.filter(Room.name.ilike(f"%{search_in_name}%"))
         if floor is not None:
@@ -64,7 +65,9 @@ class RoomsResource(Resource):
             query = query.filter(Room.capacity >= min_capacity)
 
         # Return all matching results:
-        return query.all(), 200
+        res = query.all()
+        db_session.close()
+        return res, 200
 
 
 @api.route("/<string:code>")
@@ -74,7 +77,9 @@ class RoomResource(Resource):
     @api.marshal_with(room_model)
     def get(self, code: str):
         """Get the room identified by the code."""
-        room = new_session().query(Room).get(code)
+        db_session = new_session()
+        room = db_session.query(Room).get(code)
+        db_session.close()
         if not room:
             raise NotFound(f"The code {code} does not identify any room.")
         return room, 200
